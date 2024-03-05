@@ -22,16 +22,33 @@ data:
   name: beauty #ml-20m
 
 model:
-  name: bert4rec
+  name: lsy
   dropout_rate: 0.1
   n_layers: 2
   embedding_size: 64
-  mask_prob: 0.2
+  mask_ratio: 0.2
+  loss_type: 'CE'
   n_heads: 2
   max_seq_len: 50
+  scales: [1, 2, 4] #[10, 4, 20]
+  hidden_act: "gelu" #"relu", "swish", "tanh", "sigmoid" 
+  hidden_size: 64
+  inner_size: 256
+  hidden_dropout_prob: 0.5
+  attn_dropout_prob: 0.5
+  hyper_len: 6
 
 tune:
   enable: false
   hyperparameters: []
   layer_num: []
   reg_weight: []
+  enable_hg: 1  
+  enable_ms: 1  
+  customized_eval: 0  # 1,
+  sim_threshold: 0.5
+  graph_estr: 1
+  att_aggre: 1
+  li_aggre_w: 0.1
+  loss_hg_w: 0.8
+  enable_sim: 1

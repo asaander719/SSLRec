@@ -28,6 +28,16 @@ class DataHandlerMultiBehavior:
             self.behaviors = ['view', 'cart', 'buy']
             self.beh_meta_path = ['buy', 'view_buy', 'view_cart_buy']
 
+        elif configs['data']['name'] == 'yelp':
+            self.predir = './datasets/multi_behavior/yelp/'
+            self.behaviors = ['tip', 'neg', 'neutral', 'like']
+            self.beh_meta_path = ['like', 'tip_like', 'neutral_tip_like', 'neg_neutral_tip_like']
+
+        elif configs['data']['name'] == 'ml_10m':
+            self.predir = './datasets/multi_behavior/ml_10m/'
+            self.behaviors = ['neg', 'neutral', 'pos']
+            self.beh_meta_path = ['pos', 'neutral_pos', 'neg_neutral_pos']
+
         self.train_file = self.predir + 'train_mat_'
         self.val_file = self.predir + 'test_mat.pkl'
         self.test_file = self.predir + 'test_mat.pkl'

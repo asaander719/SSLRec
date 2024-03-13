@@ -629,11 +629,12 @@ class HGNN(nn.Module):
         x1 = self.hgc1(x, G)
         # x1 = F.relu(x1)
         x1 = F.dropout(x1, self.dropout, training=self.training)
-        x2 = self.hgc2(x1, G)
-        # x2 = F.relu(x2)
-        x2 = F.dropout(x2, self.dropout, training=self.training)
-        return ((x1+x2)/2)
-        # return self.out_fc((x1+x2)/2)
+        return x1
+        # x2 = self.hgc2(x1, G)
+        # # x2 = F.relu(x2)
+        # x2 = F.dropout(x2, self.dropout, training=self.training)
+        # return ((x1+x2)/2)
+        # # return self.out_fc((x1+x2)/2)
 
 class HGNN_conv(nn.Module):
     def __init__(self, n_hid, bias=True):
@@ -649,11 +650,11 @@ class HGNN_conv(nn.Module):
             self.register_parameter('bias', None)
         # self.reset_parameters()
 
-    def reset_parameters(self):
-        stdv = 1. / math.sqrt(self.weight.size(1))
-        self.weight.data.uniform_(-stdv, stdv)
-        if self.bias is not None:
-            self.bias.data.uniform_(-stdv, stdv)
+    # def reset_parameters(self):
+    #     stdv = 1. / math.sqrt(self.weight.size(1))
+    #     self.weight.data.uniform_(-stdv, stdv)
+    #     if self.bias is not None:
+    #         self.bias.data.uniform_(-stdv, stdv)
 
     def forward(self, x: torch.Tensor, G: torch.Tensor):
         x = x.matmul(self.weight)

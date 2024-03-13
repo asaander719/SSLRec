@@ -87,9 +87,14 @@ class LSY(BaseModel):
         self.emb_nn[0].apply(lambda module: nn.init.uniform_(module.weight.data,0,0.001))
         self.emb_nn[0].apply(lambda module: nn.init.uniform_(module.bias.data,0,0.001))
 
-        self.global_nn = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size),nn.Sigmoid())#, nn.Dropout(0.1))
-        self.global_nn[0].apply(lambda module: nn.init.uniform_(module.weight.data,0,0.001))
-        self.global_nn[0].apply(lambda module: nn.init.uniform_(module.bias.data,0,0.001))
+        # self.global_nn = nn.Sequential(nn.Linear(self.max_len, self.max_len),nn.Sigmoid())#, nn.Dropout(0.1))
+        # self.global_nn[0].apply(lambda module: nn.init.uniform_(module.weight.data,0,0.001))
+        # self.global_nn[0].apply(lambda module: nn.init.uniform_(module.bias.data,0,0.001))
+
+        self.global_map = nn.Parameter(torch.Tensor(self.max_len, self.max_len))
+        nn.init.normal_(self.global_map, std=0.02)
+        self.global_map_bias = nn.Parameter(torch.Tensor(1, self.max_len))
+        nn.init.normal_(self.global_map_bias, std=0.02)
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
@@ -151,17 +156,60 @@ class LSY(BaseModel):
     def forward(self, item_seq):
         mask = (item_seq > 0).unsqueeze(1).repeat(1, item_seq.size(1), 1).unsqueeze(1)
         x = self.emb_layer(item_seq) #b, max_l, h 
-        x_raw = x * torch.sigmoid(x.matmul(self.gating_weight)+self.gating_bias) # b, l, h #func. 12?
-        # b, l, l #passed through a gating mechanism involving a sigmoid function
-        x_m = torch.stack((self.metric_w1*x_raw, self.metric_w2*x_raw)).mean(0)  # b, l, h
-        item_sim = self.sim(x_m, x_m) #similarity matrix #compatible score # b, l ,l
-        # item_sim[item_sim < 0] = 0.01 # 不加才是去噪
-        hg = self.hgnn_layer(x_m, item_sim)
 
+        # x_l = self.emb_nn(x) # project into compatatbility space, sigmoid score: 0-1 # b, l ,h
+        # comp_matrix = self.cos_sim(x_l) ##similarity matrix #compatible score # b, l ,l #cos:[-1,1]
+        # comp_matrix_nor = F.normalize(comp_matrix, p=2, dim=(1, 2)) # b,l,l #本身对称
+        # # DV = torch.sum(comp_matrix, dim=1)
+        # # DE = torch.sum(comp_matrix, dim=0)
+        # # invDE = torch.diag(torch.pow(DE, -1))
+        # # invDV = torch.diag(torch.pow(DV, -1))
+        # # # DV2 = torch.diag(torch.pow(DV, -0.5))
+        # # HT = comp_matrix.t()
+        # # G = invDV.mm(H).mm(invDE).mm(HT) # b,l,l
+
+        # local_contri = torch.sigmoid(torch.sum(torch.matmul(comp_matrix_nor, x), d=-1)) 
+        # #b,l,l*b,l,h-> b,l,h -> 
+        #3_13
+        x_l = self.emb_nn(x) # project into compatatbility space, sigmoid score: 0-1 # b, l ,h
+        comp_matrix = self.cos_sim(x_l) ##similarity matrix #compatible score # b, l ,l #cos:[-1,1]
+        comp_matrix_nor = F.normalize(comp_matrix, p=2, dim=(1, 2))
+        global_comp = comp_matrix_nor.matmul(self.global_map)+self.global_map_bias # b, l ,l 但是值域和local不一样
+        global_comp_nor = F.normalize(global_comp, p=2, dim=(1, 2)) #normalize 让两个matrix不要相差太多
+        overall_comp = comp_matrix_nor + global_comp_nor # b, l, l
+        new_x = torch.matmul(torch.sigmoid(overall_comp), x)
         for transformer in self.transformer_layers_1:
-            x_1 = transformer(x, mask)
-        mixed_x = self.li_aggre_w * x_1 + (1-self.li_aggre_w) * hg
+            x_1 = transformer(new_x, mask)
+        for transformer in self.transformer_layers_2:
+            x_2 = transformer(x, mask)
+        mixed_x = x_1 + x_2
+        # 3_12
+        # seq_contribution_score = torch.sigmoid(torch.sum(torch.matmul(compatibility_score_matrix, x)), dim=-1) 
+        # #b,l,l * b,l,h-> b,l,h 
+        # print(seq_contribution_score.size())
+        # global_contribution_score = self.global_nn(seq_contribution_score) #sigmoid(linear) #b, l
+        # total_contribution_scores = seq_contribution_score + global_contribution_score # b, l
+        # # Normalize total contribution scores
+        # total_contribution_scores = F.normalize(total_contribution_scores, p=1, dim=1)
+        # # Element-wise multiplication with input sequence
+        # denoised_sequence = x * total_contribution_scores.unsqueeze(2)
+        # # Sum along sequence length dimension
+        # new_x = torch.sum(denoised_sequence, dim=1)
+        # for transformer in self.transformer_layers_1:
+        #     mixed_x = transformer(new_x, mask)
 
+        # 3_13
+        # x_raw = x * torch.sigmoid(x.matmul(self.gating_weight)+self.gating_bias) # b, l, h #func. 12?
+        # # b, l, l #passed through a gating mechanism involving a sigmoid function
+        # x_m = torch.stack((self.metric_w1*x_raw, self.metric_w2*x_raw)).mean(0)  # b, l, h
+        # item_sim = self.sim(x_m, x_m) #similarity matrix #compatible score # b, l ,l
+        # # item_sim[item_sim < 0] = 0.01 # 不加才是去噪
+        # hg = self.hgnn_layer(x_m, item_sim)
+
+        # for transformer in self.transformer_layers_1:
+        #     x_1 = transformer(x_m, mask)
+        # # mixed_x = self.li_aggre_w * x_1 + (1-self.li_aggre_w) * hg
+        # mixed_x = x_1 + hg
         # 3_11
         # if self.global_hg:
         #     A_K = []
@@ -196,7 +244,8 @@ class LSY(BaseModel):
         #         mixed_x = (mixed_x*score).sum(0)
         #     elif self.li_aggre:
         #         mixed_x = self.li_aggre_w * x_1 + (1-self.li_aggre_w) * x_k
-        
+
+        # 3_3
         # for transformer in self.transformer_layers_2:
         #     x_2 = transformer(hgnn_embs, mask)
         # for transformer in self.transformer_layers_3:
@@ -293,3 +342,10 @@ class LSY(BaseModel):
         z1 = F.normalize(z1)
         z2 = F.normalize(z2)
         return torch.matmul(z1, z2.permute(0,2,1))
+
+    def cos_sim(self, x):
+        # Compute dot product of all pairs of vectors
+        dot_product = torch.matmul(x, x.transpose(1, 2))
+        magnitudes = torch.norm(x, p=2, dim=-1, keepdim=True)
+        similarity_matrix = dot_product / (magnitudes * magnitudes.transpose(1, 2) + 1e-8)
+        return similarity_matrix

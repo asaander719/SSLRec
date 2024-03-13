@@ -48,6 +48,10 @@ class LSY(BaseModel):
         self.li_aggre_w = configs['model']['li_aggre_w']
         self.global_hg = configs['model']['global_hg']
         self.feed = configs['model']['feed']
+        self.t = configs['model']['temperature']
+
+        self.SelfAttentionModel = SelfAttentionModel(self.hidden_size, self.max_len, self.n_heads)
+        self.MLP = MLP(self.max_len, self.max_len, self.max_len, num_layers=1) #hidden_layer =1, outputlayer = 1, total = 2
 
         self.A_I = nn.Parameter(torch.Tensor(self.item_num + 2, self.item_num + 2))
         nn.init.xavier_uniform_(self.A_I.data)
@@ -81,7 +85,6 @@ class LSY(BaseModel):
 
         self.loss_func = nn.CrossEntropyLoss(ignore_index=0)
         self.out_fc = nn.Linear(self.hidden_size, self.item_num + 1)
-        self.apply(self._init_weights)
 
         self.emb_nn = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size),nn.Sigmoid())#, nn.Dropout(0.1))
         self.emb_nn[0].apply(lambda module: nn.init.uniform_(module.weight.data,0,0.001))
@@ -95,6 +98,8 @@ class LSY(BaseModel):
         nn.init.normal_(self.global_map, std=0.02)
         self.global_map_bias = nn.Parameter(torch.Tensor(1, self.max_len))
         nn.init.normal_(self.global_map_bias, std=0.02)
+
+        self.apply(self._init_weights)
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
@@ -156,33 +161,29 @@ class LSY(BaseModel):
     def forward(self, item_seq):
         mask = (item_seq > 0).unsqueeze(1).repeat(1, item_seq.size(1), 1).unsqueeze(1)
         x = self.emb_layer(item_seq) #b, max_l, h 
-
-        # x_l = self.emb_nn(x) # project into compatatbility space, sigmoid score: 0-1 # b, l ,h
-        # comp_matrix = self.cos_sim(x_l) ##similarity matrix #compatible score # b, l ,l #cos:[-1,1]
-        # comp_matrix_nor = F.normalize(comp_matrix, p=2, dim=(1, 2)) # b,l,l #本身对称
-        # # DV = torch.sum(comp_matrix, dim=1)
-        # # DE = torch.sum(comp_matrix, dim=0)
-        # # invDE = torch.diag(torch.pow(DE, -1))
-        # # invDV = torch.diag(torch.pow(DV, -1))
-        # # # DV2 = torch.diag(torch.pow(DV, -0.5))
-        # # HT = comp_matrix.t()
-        # # G = invDV.mm(H).mm(invDE).mm(HT) # b,l,l
-
-        # local_contri = torch.sigmoid(torch.sum(torch.matmul(comp_matrix_nor, x), d=-1)) 
-        # #b,l,l*b,l,h-> b,l,h -> 
-        #3_13
-        x_l = self.emb_nn(x) # project into compatatbility space, sigmoid score: 0-1 # b, l ,h
-        comp_matrix = self.cos_sim(x_l) ##similarity matrix #compatible score # b, l ,l #cos:[-1,1]
-        comp_matrix_nor = F.normalize(comp_matrix, p=2, dim=(1, 2))
-        global_comp = comp_matrix_nor.matmul(self.global_map)+self.global_map_bias # b, l ,l 但是值域和local不一样
-        global_comp_nor = F.normalize(global_comp, p=2, dim=(1, 2)) #normalize 让两个matrix不要相差太多
-        overall_comp = comp_matrix_nor + global_comp_nor # b, l, l
-        new_x = torch.matmul(torch.sigmoid(overall_comp), x)
+        seq_contribution_score = self.SelfAttentionModel(x)#.unsqueeze(-1).expand(-1, -1, x.size(-1)) # B,L -> b,l,l
+        # 不直接计算b,l,h， 让h维度的的importance共享！！
+        global_contribution_score = self.MLP(seq_contribution_score) # B,L
+        x_1_weight = seq_contribution_score.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
+        x_2_weight = global_contribution_score.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
         for transformer in self.transformer_layers_1:
-            x_1 = transformer(new_x, mask)
+            x_1 = transformer(torch.matmul(x_1_weight, x), mask) # [b, l]
         for transformer in self.transformer_layers_2:
-            x_2 = transformer(x, mask)
+            x_2 = transformer(torch.matmul(x_2_weight, x), mask) # [b, l]
         mixed_x = x_1 + x_2
+        #3_13
+        # x_l = self.emb_nn(x) # project into compatatbility space, sigmoid score: 0-1 # b, l ,h 但是embedding本来就在一个空间
+        # comp_matrix = self.cos_sim(x)#(x_l) ##similarity matrix #compatible score # b, l ,l #cos:[-1,1]
+        # comp_matrix_nor = F.normalize(comp_matrix, p=2, dim=(1, 2))
+        # global_comp = comp_matrix_nor.matmul(self.global_map)+self.global_map_bias # b, l ,l 但是值域和local不一样
+        # global_comp_nor = F.normalize(global_comp, p=2, dim=(1, 2)) #normalize 让两个matrix不要相差太多
+        # overall_comp = comp_matrix_nor + global_comp_nor # b, l, l
+        # new_x = torch.matmul(torch.sigmoid(overall_comp), x)
+        # for transformer in self.transformer_layers_1:
+        #     x_1 = transformer(new_x, mask)
+        # for transformer in self.transformer_layers_2:
+        #     x_2 = transformer(x, mask)
+        # mixed_x = x_1 + x_2
         # 3_12
         # seq_contribution_score = torch.sigmoid(torch.sum(torch.matmul(compatibility_score_matrix, x)), dim=-1) 
         # #b,l,l * b,l,h-> b,l,h 
@@ -250,7 +251,7 @@ class LSY(BaseModel):
         #     x_2 = transformer(hgnn_embs, mask)
         # for transformer in self.transformer_layers_3:
         #     x_3 = transformer(hgnn_embs, mask)
-        return mixed_x # + x_2 + x_3
+        return mixed_x #, x_1, x_2 # + x_2 + x_3
 
     def cal_loss(self, batch_data):
         batch_user, batch_seqs, batch_last_items = batch_data
@@ -259,14 +260,13 @@ class LSY(BaseModel):
         # B, T, E
         logits_t = self.forward(masked_seqs) # [b, l]
         # loss_contrstive = torch.mean((logits_t - logits_g)**2)
-
         logits = self.out_fc(logits_t) # [b, l, n+1]
         # B, T, E -> B*T, E
         logits = logits.view(-1, logits.size(-1)) # [b*l, n+1]
+        # kl_loss = F.kl_div(logits_1, logits_2, reduction='batchmean')
         loss = self.loss_func(logits, masked_items.reshape(-1)) 
-        # reg_loss = self.reg_loss()
-        total_loss = loss #+ self.reg_lambda * reg_loss
-        loss_dict = {'rec_loss': total_loss.item()}#, "reg_loss": reg_loss.item()}
+        total_loss = loss #+ 0.1 * kl_loss 
+        loss_dict = {'rec_loss': total_loss.item()}#, "kl_loss": kl_loss.item()}#, "reg_loss": reg_loss.item()}
         return total_loss, loss_dict
 
     def full_predict(self, batch_data):
@@ -349,3 +349,16 @@ class LSY(BaseModel):
         magnitudes = torch.norm(x, p=2, dim=-1, keepdim=True)
         similarity_matrix = dot_product / (magnitudes * magnitudes.transpose(1, 2) + 1e-8)
         return similarity_matrix
+
+    def distillation_loss(self, outputs, teacher_outputs, temperature):
+        soft_teacher_outputs = F.softmax(teacher_outputs / temperature, dim=1)
+        # 计算学生模型的 softmax 概率分布
+        soft_outputs = F.softmax(outputs / temperature, dim=1)
+        loss = -torch.mean(torch.sum(soft_teacher_outputs * torch.log(soft_outputs), dim=1))
+        return loss
+
+    def kl_loss(self, outputs, teacher_outputs, temperature):
+        soft_teacher_outputs = F.log_softmax(teacher_outputs / temperature, dim=1)
+        soft_outputs = F.log_softmax(outputs / temperature, dim=1)
+        loss = F.kl_div(soft_outputs, soft_teacher_outputs, reduction='batchmean')
+        return loss

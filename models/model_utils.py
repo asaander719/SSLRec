@@ -662,3 +662,44 @@ class HGNN_conv(nn.Module):
             x = x + self.bias
         x = G.matmul(x)
         return x
+
+class MLP(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size, num_layers):
+        super(MLP, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.num_layers = num_layers
+
+        self.hidden_layers = nn.ModuleList()
+        self.hidden_layers.append(nn.Linear(input_size, hidden_size))
+        for _ in range(num_layers - 1):
+            self.hidden_layers.append(nn.Linear(hidden_size, hidden_size))
+        # 输出层
+        self.output_layer = nn.Linear(hidden_size, output_size)
+        # 激活函数
+        self.activation = nn.ReLU()
+
+    def forward(self, x):
+        if x.size(-1) != self.input_size:
+            x = x.view(-1, self.input_size) 
+        for layer in self.hidden_layers:
+            x = self.activation(layer(x))
+        x = self.output_layer(x)
+        x = torch.softmax(x, dim=1)
+        return x
+
+class SelfAttentionModel(nn.Module): # for calculate the contribution of each item in the sequence
+    def __init__(self, hidden_size, output_size, num_heads):
+        super(SelfAttentionModel, self).__init__()
+        self.attention = nn.MultiheadAttention(hidden_size, num_heads)
+        self.fc = nn.Linear(hidden_size, output_size)
+
+    def forward(self, embedded_seq):
+        # Multi-head self-attention
+        attention_output, _ = self.attention(embedded_seq, embedded_seq, embedded_seq)  
+        # Apply attention weights
+        weighted_seq = attention_output.mean(dim=1)  # Mean pooling over attention output
+        output = self.fc(weighted_seq)
+        return F.softmax(output, dim=1) #output
+        # the softmax importance score of each item in the sequence

@@ -41,6 +41,7 @@ model:
   global_hg: True
   att_aggre: False # False is better
   li_aggre_w: 0.9
+  temperature: 5
   # enable_hg: 1  
   # enable_ms: 1  
   # customized_eval: 0  # 1,

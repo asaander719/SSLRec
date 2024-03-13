@@ -40,6 +40,7 @@ class LSY(BaseModel):
         self.transformer_layers_3 = nn.ModuleList([TransformerLayer(
             self.emb_size, self.n_heads * 2, self.emb_size * 8, self.dropout_rate) for _ in range(self.n_layers)])
 
+        self.emb_nn = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size),nn.Sigmoid())#, nn.Dropout(configs['model']['hidden_dropout_prob'])) 
         self.A_N = nn.Parameter(torch.Tensor(self.max_len, self.max_len))
         nn.init.xavier_uniform_(self.A_N.data)
         # self.reg_lambda = 0.001
@@ -82,14 +83,6 @@ class LSY(BaseModel):
         self.loss_func = nn.CrossEntropyLoss(ignore_index=0)
         self.out_fc = nn.Linear(self.hidden_size, self.item_num + 1)
         self.apply(self._init_weights)
-
-        self.emb_nn = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size),nn.Sigmoid())#, nn.Dropout(0.1))
-        self.emb_nn[0].apply(lambda module: nn.init.uniform_(module.weight.data,0,0.001))
-        self.emb_nn[0].apply(lambda module: nn.init.uniform_(module.bias.data,0,0.001))
-
-        self.global_nn = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size),nn.Sigmoid())#, nn.Dropout(0.1))
-        self.global_nn[0].apply(lambda module: nn.init.uniform_(module.weight.data,0,0.001))
-        self.global_nn[0].apply(lambda module: nn.init.uniform_(module.bias.data,0,0.001))
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
@@ -150,52 +143,45 @@ class LSY(BaseModel):
 
     def forward(self, item_seq):
         mask = (item_seq > 0).unsqueeze(1).repeat(1, item_seq.size(1), 1).unsqueeze(1)
-        x = self.emb_layer(item_seq) #b, max_l, h 
-        x_raw = x * torch.sigmoid(x.matmul(self.gating_weight)+self.gating_bias) # b, l, h #func. 12?
-        # b, l, l #passed through a gating mechanism involving a sigmoid function
-        x_m = torch.stack((self.metric_w1*x_raw, self.metric_w2*x_raw)).mean(0)  # b, l, h
-        item_sim = self.sim(x_m, x_m) #similarity matrix #compatible score # b, l ,l
-        # item_sim[item_sim < 0] = 0.01 # 不加才是去噪
-        hg = self.hgnn_layer(x_m, item_sim)
+        x = self.emb_layer(item_seq) #torch.Size([512, 50, 64])  
+        # x = self.emb_nn(x) #torch.Size([512, 50, 64])  # emb. low-dimentional mapping
 
-        for transformer in self.transformer_layers_1:
-            x_1 = transformer(x, mask)
-        mixed_x = self.li_aggre_w * x_1 + (1-self.li_aggre_w) * hg
+        # x = self.LayerNorm(x) # 2024_3_11_21:57
+        # x = self.dropout(x)
 
-        # 3_11
-        # if self.global_hg:
-        #     A_K = []
-        #     for batch_idx in range(item_seq.shape[0]):
-        #         seq = item_seq[batch_idx]
-        #         # Ensure that seq contains valid indices
-        #         if (seq < 0).any() or (seq >= self.A_I.size(0)).any():
-        #             raise ValueError("Invalid indices in seq.")
-        #         A_I_seq = self.A_I.index_select(0, seq).index_select(1, seq) # 50,50
-        #         assert not torch.isnan(A_I_seq).any()
-        #         A_K_seq = A_I_seq + self.A_N #0.5 * ((A_I_seq + self.A_N) + (A_I_seq + self.A_N).t())
-        #         A_K.append(A_K_seq.unsqueeze(0))  # Add a batch dimension
+        if self.global_hg:
+            A_K = []
+            for batch_idx in range(item_seq.shape[0]):
+                seq = item_seq[batch_idx]
+                # Ensure that seq contains valid indices
+                if (seq < 0).any() or (seq >= self.A_I.size(0)).any():
+                    raise ValueError("Invalid indices in seq.")
+                A_I_seq = self.A_I.index_select(0, seq).index_select(1, seq) # 50,50
+                assert not torch.isnan(A_I_seq).any()
+                A_K_seq = 0.5 * ((A_I_seq + self.A_N) + (A_I_seq + self.A_N).t())
+                A_K.append(A_K_seq.unsqueeze(0))  # Add a batch dimension
 
-        #     A_K = torch.cat(A_K, dim=0) #torch.Size([512, 50, 2500])
-        # else: 
-        #     A_K = self.A_N.unsqueeze(0).expand(x.size(0), -1, -1)
+            A_K = torch.cat(A_K, dim=0) #torch.Size([512, 50, 2500])
+        else: 
+            A_K = self.A_N.unsqueeze(0).expand(x.size(0), -1, -1)
 
-        # x_k = torch.matmul(A_K, x)
+        x_k = torch.matmul(A_K, x)
 
-        # if self.feed:
-        #     for transformer in self.transformer_layers_1:
-        #         mixed_x = transformer(x_k, mask)
+        if self.feed:
+            for transformer in self.transformer_layers_1:
+                mixed_x = transformer(x_k, mask)
 
-        # else:
-        #     for transformer in self.transformer_layers_1:
-        #         x_1 = transformer(x, mask)
+        else:
+            for transformer in self.transformer_layers_1:
+                x_1 = transformer(x, mask)
 
-        #     if self.att_aggre: 
-        #         mixed_x = torch.stack((x_1, x_k), dim=0)
-        #         weights = (torch.matmul(mixed_x, self.attn_weights.unsqueeze(0).unsqueeze(0))*self.attn).sum(-1)
-        #         score = F.softmax(weights, dim=0).unsqueeze(-1)
-        #         mixed_x = (mixed_x*score).sum(0)
-        #     elif self.li_aggre:
-        #         mixed_x = self.li_aggre_w * x_1 + (1-self.li_aggre_w) * x_k
+            if self.att_aggre: 
+                mixed_x = torch.stack((x_1, x_k), dim=0)
+                weights = (torch.matmul(mixed_x, self.attn_weights.unsqueeze(0).unsqueeze(0))*self.attn).sum(-1)
+                score = F.softmax(weights, dim=0).unsqueeze(-1)
+                mixed_x = (mixed_x*score).sum(0)
+            elif self.li_aggre:
+                mixed_x = self.li_aggre_w * x_1 + (1-self.li_aggre_w) * x_k
         
         # for transformer in self.transformer_layers_2:
         #     x_2 = transformer(hgnn_embs, mask)

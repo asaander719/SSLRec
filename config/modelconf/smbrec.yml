@@ -15,12 +15,12 @@ train:
 
 test:
   metrics: [recall, ndcg]
-  k: [10, 20, 40]
+  k: [5, 10, 20, 40]
   batch_size: 1024
 
 data:
   type: multi_behavior
-  name: retail_rocket
+  name: ml_10m #retail_rocket
 
 model:
   name: smbrec
@@ -29,7 +29,7 @@ model:
   reg_weight: 1.0e-2
   cl_weight: 0.1
   embedding_size: 32
-  target: buy
+  target: pos #buy
   dropout: 0.2
   sample_num_pos: 5
   sample_num_neg: 5

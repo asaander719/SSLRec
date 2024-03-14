@@ -49,6 +49,7 @@ class LSY(BaseModel):
         self.global_hg = configs['model']['global_hg']
         self.feed = configs['model']['feed']
         self.t = configs['model']['temperature']
+        
 
         self.SelfAttentionModel = SelfAttentionModel(self.hidden_size, self.max_len, self.n_heads)
         self.MLP = MLP(self.max_len, self.max_len, self.max_len, num_layers=1) #hidden_layer =1, outputlayer = 1, total = 2
@@ -161,16 +162,22 @@ class LSY(BaseModel):
     def forward(self, item_seq):
         mask = (item_seq > 0).unsqueeze(1).repeat(1, item_seq.size(1), 1).unsqueeze(1)
         x = self.emb_layer(item_seq) #b, max_l, h 
-        seq_contribution_score = self.SelfAttentionModel(x)#.unsqueeze(-1).expand(-1, -1, x.size(-1)) # B,L -> b,l,l
-        # 不直接计算b,l,h， 让h维度的的importance共享！！
-        global_contribution_score = self.MLP(seq_contribution_score) # B,L
-        x_1_weight = seq_contribution_score.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
-        x_2_weight = global_contribution_score.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
-        for transformer in self.transformer_layers_1:
-            x_1 = transformer(torch.matmul(x_1_weight, x), mask) # [b, l]
-        for transformer in self.transformer_layers_2:
-            x_2 = transformer(torch.matmul(x_2_weight, x), mask) # [b, l]
-        mixed_x = x_1 + x_2
+        
+
+        # #3_14
+        # seq_contribution_score = self.SelfAttentionModel(x)#.unsqueeze(-1).expand(-1, -1, x.size(-1)) # B,L -> b,l,l
+        # # 不直接计算b,l,h， 让h维度的的importance共享！！
+        # global_contribution_score = self.MLP(seq_contribution_score) # B,L
+        # x_1_weight = seq_contribution_score.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
+        # x_2_weight = global_contribution_score.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
+        # for transformer in self.transformer_layers_1:
+        #     x_1 = transformer(torch.matmul(x_1_weight, x), mask) # [b, l]: LX
+        # for transformer in self.transformer_layers_2:
+        #     x_2 = transformer(x, mask) # [b, l] : X
+        # for transformer in self.transformer_layers_3:
+        #     x_3 = transformer(torch.matmul(x_2_weight, x), mask) # [b, l] :GX
+        # mixed_x = 0.1 * x_1 + x_2 + 0.9 * x_3 #+ torch.matmul(x_2_weight, x_2) 
+        # return mixed_x, x_1, x_2, x_3 # LX, X, GX
         #3_13
         # x_l = self.emb_nn(x) # project into compatatbility space, sigmoid score: 0-1 # b, l ,h 但是embedding本来就在一个空间
         # comp_matrix = self.cos_sim(x)#(x_l) ##similarity matrix #compatible score # b, l ,l #cos:[-1,1]
@@ -251,28 +258,32 @@ class LSY(BaseModel):
         #     x_2 = transformer(hgnn_embs, mask)
         # for transformer in self.transformer_layers_3:
         #     x_3 = transformer(hgnn_embs, mask)
-        return mixed_x #, x_1, x_2 # + x_2 + x_3
+        # return mixed_x #, x_1, x_2 # + x_2 + x_3
 
     def cal_loss(self, batch_data):
         batch_user, batch_seqs, batch_last_items = batch_data
         masked_seqs, masked_items = self._transform_train_seq(
             batch_seqs, batch_last_items.unsqueeze(1))
         # B, T, E
-        logits_t = self.forward(masked_seqs) # [b, l]
+        logits_t, LX, X, GX = self.forward(masked_seqs) # [b, l]
         # loss_contrstive = torch.mean((logits_t - logits_g)**2)
         logits = self.out_fc(logits_t) # [b, l, n+1]
         # B, T, E -> B*T, E
         logits = logits.view(-1, logits.size(-1)) # [b*l, n+1]
         # kl_loss = F.kl_div(logits_1, logits_2, reduction='batchmean')
         loss = self.loss_func(logits, masked_items.reshape(-1)) 
-        total_loss = loss #+ 0.1 * kl_loss 
-        loss_dict = {'rec_loss': total_loss.item()}#, "kl_loss": kl_loss.item()}#, "reg_loss": reg_loss.item()}
+        # TransE_loss = self.transE_loss(LX, GX, X, transe_margin = 0.0, transe_bias=0.0)
+        
+        total_loss = loss #+ TransE_loss  #+ 0.1 * kl_loss 
+        
+        loss_dict = {'rec_loss': total_loss.item()}
+        #, "TransE_loss": TransE_loss.item()}#, "kl_loss": kl_loss.item()}#, "reg_loss": reg_loss.item()}
         return total_loss, loss_dict
 
     def full_predict(self, batch_data):
         batch_user, batch_seqs, _ = batch_data
         masked_seqs = self._transform_test_seq(batch_seqs)
-        scores = self.forward(masked_seqs)
+        scores, LX, X, GX = self.forward(masked_seqs)
         scores = self.out_fc(scores)
         scores = scores[:, -1, :]
         return scores
@@ -362,3 +373,7 @@ class LSY(BaseModel):
         soft_outputs = F.log_softmax(outputs / temperature, dim=1)
         loss = F.kl_div(soft_outputs, soft_teacher_outputs, reduction='batchmean')
         return loss
+
+    def transE_loss(self, LX, GX, X, transe_margin, transe_bias):
+        loss = torch.relu(torch.norm(X - LX - GX, p=2, dim=1) + transe_margin + transe_bias)
+        return loss.mean()

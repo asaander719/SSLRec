@@ -14,7 +14,7 @@ train:
   log_loss: false
 
 test:
-  metrics: [recall, ndcg] # choose in {ndcg, recall, precision, mrr}
+  metrics: [recall, ndcg, mrr] # choose in {ndcg, recall, precision, mrr}
   k: [5, 10, 20] # top-k
   batch_size: 512 # How many users per batch during validation
 

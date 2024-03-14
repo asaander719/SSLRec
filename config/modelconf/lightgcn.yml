@@ -16,8 +16,8 @@ train:
   #pretrain_path: ./checkpoint/xxxx.pth
 
 test:
-  metrics: [recall, ndcg] # choose in {ndcg, recall, precision, mrr}
-  k: [10, 20, 40] # top-k
+  metrics: [recall, ndcg, mrr] # choose in {ndcg, recall, precision, mrr}
+  k: [5, 10, 20] # top-k
   batch_size: 1024 # How many users per batch during validation
 
 data:
@@ -31,6 +31,8 @@ model:
   layer_num: 2
   reg_weight: 1.0e-8
   embedding_size: 32
+
+  max_seq_len: 50
 
 tune:
   enable: false # Whether to enable grid search to search for optimal hyperparameters

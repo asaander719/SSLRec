@@ -4,8 +4,8 @@ optimizer:
   weight_decay: 0
 
 train:
-  epoch: 200
-  batch_size: 512
+  epoch: 250
+  batch_size: 256 #512
   save_model: true
   log_loss: false
   test_step: 1
@@ -15,7 +15,7 @@ train:
 test:
   metrics: [recall, ndcg, mrr]
   k: [5, 10, 20]
-  batch_size: 512
+  batch_size: 256 #512
 
 data:
   type: sequential
@@ -42,6 +42,8 @@ model:
   att_aggre: False # False is better
   li_aggre_w: 0.9
   temperature: 5
+  lmd: 0.1
+  tau: 1
   # enable_hg: 1  
   # enable_ms: 1  
   # customized_eval: 0  # 1,
@@ -55,3 +57,5 @@ tune:
   hyperparameters: []
   layer_num: []
   reg_weight: []
+  lmb: [0.05, 0.1, 0.2]
+  tau: [0.5, 0.7, 0.9]

@@ -211,13 +211,13 @@ class LSY(BaseModel):
         new_mask = (new_item_seq > 0).unsqueeze(1).repeat(1, new_item_seq.size(1), 1).unsqueeze(1)
         # new_x, pad_scores = x, seq_contribution_score
         global_contribution_score = self.MLP(pad_scores) # B,L
-        # x_1_weight = pad_scores.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
-        x_1_weight = seq_contribution_score.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
+        x_1_weight = pad_scores.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
+        # x_1_weight = seq_contribution_score.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
         x_2_weight = global_contribution_score.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
         
         for transformer in self.transformer_layers_1:
             # x_1 = transformer(torch.matmul(x_1_weight, new_x), mask) # [b, l, h]: LX
-            x_1 = transformer(torch.matmul(x_1_weight, x), mask) # [b, l, h]: LX
+            x_1 = transformer(torch.matmul(x_1_weight, new_x_emb), new_mask) # [b, l, h]: LX
         for transformer in self.transformer_layers_1:
             x_2 = transformer(x, mask) # [b, l, h] : X
         for transformer in self.transformer_layers_1:
@@ -465,8 +465,9 @@ class LSY(BaseModel):
 
     # 基于邻近项的补充
     def impute_missing_items(self, input_seq, scores, topk =1):
-        embedding_weights = self.emb_layer.token_emb.weight.clone().detach()
-        # print(embedding_weights.requires_grad) #False
+        input_seq = input_seq.clone().detach()
+        embedding_weights = self.emb_layer.token_emb.weight[:, :]#.weight.clone().detach()
+        # print(embedding_weights.requires_grad) #True
         embedding_weights = self.emb_nn(embedding_weights)
         new_score = scores.clone().detach()
         # print(new_score.requires_grad) #False

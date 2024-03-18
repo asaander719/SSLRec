@@ -182,7 +182,7 @@ class CL4SRec(BaseModel):
 
         # NCE
         aug_seq1, aug_seq2 = self._cl4srec_aug(batch_seqs)
-        seq_output1 = self.forward(aug_seq1)
+        seq_output1 = self.forward(aug_seq1) #b, h
         seq_output2 = self.forward(aug_seq2)
 
         cl_loss = self.lmd * self.info_nce(

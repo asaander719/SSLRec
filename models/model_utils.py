@@ -694,12 +694,22 @@ class SelfAttentionModel(nn.Module): # for calculate the contribution of each it
         super(SelfAttentionModel, self).__init__()
         self.attention = nn.MultiheadAttention(hidden_size, num_heads)
         self.fc = nn.Linear(hidden_size, output_size)
+        self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, embedded_seq):
         # Multi-head self-attention
-        attention_output, _ = self.attention(embedded_seq, embedded_seq, embedded_seq)  
+        attn_output, attn_output_weights = self.attention(embedded_seq, embedded_seq, embedded_seq)  # b,l,h ; b, l,l 
         # Apply attention weights
-        weighted_seq = attention_output.mean(dim=1)  # Mean pooling over attention output
+        weighted_seq = attn_output.mean(dim=1)  # Mean pooling over attention output
         output = self.fc(weighted_seq)
         return F.softmax(output, dim=1) #output
-        # the softmax importance score of each item in the sequence
+        # # the softmax importance score of each item in the sequence
+        # Contribution Scores
+        # 3/18
+        # scores = self.softmax(attn_output.sum(dim=-1))  # (batch_size, seq_len) #实验证明不好用！！
+        # return scores
+'''attn_output_weights是自注意力机制的输出 它表示了每个输入元素对于输出元素的贡献程度。直接使用attn_output_weights作为每个item的贡献得分。
+然而 attn_output_weights的形状是(batch_size, seq_len, seq_len) 它表示了序列中每个元素对于每个元素的贡献。如果想要得到每个元素的总贡献得分
+可能需要对attn_output_weights进行一些操作 例如求和或者取平均。
+另一方面 attn_output是自注意力机制的输出 它已经考虑了每个元素的贡献。因此对attn_output求和并应用softmax函数可以得到每个元素的贡献得分
+这可能更直接一些。'''

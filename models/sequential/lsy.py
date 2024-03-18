@@ -204,18 +204,24 @@ class LSY(BaseModel):
 
 
         # #3_14
-        # x = self.impute_missing_items(x)
-        seq_contribution_score = self.SelfAttentionModel(x)#.unsqueeze(-1).expand(-1, -1, x.size(-1)) # B,L -> b,l,l
+        seq_contribution_score = self.SelfAttentionModel(x)
         # 不直接计算b,l,h， 让h维度的的importance共享！！
-        global_contribution_score = self.MLP(seq_contribution_score) # B,L
+        new_item_seq, pad_scores = self.impute_missing_items(item_seq, seq_contribution_score)
+        new_x_emb = self.emb_layer(new_item_seq)
+        new_mask = (new_item_seq > 0).unsqueeze(1).repeat(1, new_item_seq.size(1), 1).unsqueeze(1)
+        # new_x, pad_scores = x, seq_contribution_score
+        global_contribution_score = self.MLP(pad_scores) # B,L
+        # x_1_weight = pad_scores.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
         x_1_weight = seq_contribution_score.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
         x_2_weight = global_contribution_score.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
+        
         for transformer in self.transformer_layers_1:
+            # x_1 = transformer(torch.matmul(x_1_weight, new_x), mask) # [b, l, h]: LX
             x_1 = transformer(torch.matmul(x_1_weight, x), mask) # [b, l, h]: LX
         for transformer in self.transformer_layers_1:
             x_2 = transformer(x, mask) # [b, l, h] : X
         for transformer in self.transformer_layers_1:
-            x_3 = transformer(torch.matmul(x_2_weight, x), mask) # [b, l, h] :GX
+            x_3 = transformer(torch.matmul(x_2_weight, new_x_emb), new_mask) # [b, l, h] :GX
         mixed_x = x_1 + x_2 + x_3 #+ torch.matmul(x_2_weight, x_2) 
         return mixed_x, x_1, x_2, x_3 # LX, X, GX
         #3_13
@@ -310,6 +316,8 @@ class LSY(BaseModel):
         # loss_contrstive = torch.mean((logits_t - logits_g)**2)
         # logits = self.out_fc(logits_t) # [b, l, n+1]
         logits = self.out_fc(X) # [b, l, n+1]
+        # LX = self.out_fc(LX)
+        # GX = self.out_fc(GX) # 实验证明不太好用！！
         LX = LX[:, -1, :] #最后一个item B,H
         GX = GX[:, -1, :]
         logits = logits.view(-1, logits.size(-1)) # [b*l, n+1]
@@ -456,28 +464,25 @@ class LSY(BaseModel):
         return mask
 
     # 基于邻近项的补充
-    def impute_missing_items(self, sequence):
-        missing_indices = torch.where(sequence == 0)
-        embedding_weights = self.emb_nn(self.emb_layer.token_emb.weight)
-        similarity_matrix = torch.mm(embedding_weights, embedding_weights.T).to(sequence.device) #[15418, 15418] item_num+2
-        imputed_sequence = sequence.clone() #
-        batch_indices, missing_indices = missing_indices[0].long(), missing_indices[1].long()  # 将张量转换为整数张量
-        print(similarity_matrix.size(), imputed_sequence.size(), batch_indices.size(),missing_indices.size())
-        relevant_similarity_scores = similarity_matrix[sequence[torch.arange(sequence.size(0)), batch_indices][:, None], :]  # 应用索引到原始序列上
-        most_similar_indices = torch.argmax(relevant_similarity_scores, dim=1)
-        imputed_sequence[torch.arange(imputed_sequence.size(0)), missing_indices] = most_similar_indices + 1  # 加1是因为索引从1开始
-        return imputed_sequence
-    # def get_highest_score_indices(scores, missing_indices):
-    #     # 计算每个序列中最高得分的项的索引
-    #     highest_score_indices = torch.argmax(scores, dim=1)
-    #     # 仅保留缺失项的最高得分索引
-    #     highest_score_indices = highest_score_indices[missing_indices]
-    #     return highest_score_indices
-
-    # # 基于最高 sigmoid 得分的项补充缺失项
-    # def impute_missing_items(sequence, scores, missing_indices):
-    #     imputed_sequence = sequence.clone()
-    #     highest_score_indices = get_highest_score_indices(scores, missing_indices)
-    #     for batch_idx, index in enumerate(highest_score_indices):
-    #         imputed_sequence[batch_idx, missing_indices[batch_idx]] = index
-    #     return imputed_sequence
+    def impute_missing_items(self, input_seq, scores, topk =1):
+        embedding_weights = self.emb_layer.token_emb.weight.clone().detach()
+        # print(embedding_weights.requires_grad) #False
+        embedding_weights = self.emb_nn(embedding_weights)
+        new_score = scores.clone().detach()
+        # print(new_score.requires_grad) #False
+        # similarity_matrix = F.cosine_similarity(embedding_weights.unsqueeze(1), embedding_weights.unsqueeze(0), dim=-1) #太占内存！！
+        similarity_matrix = torch.mm(embedding_weights, embedding_weights.T).to(input_seq.device)
+        # 获取对角线索引
+        diag_indices = torch.arange(similarity_matrix.size(0), device=similarity_matrix.device)
+        # 将对角线元素设置为0
+        similarity_matrix[diag_indices, diag_indices] = 0 #[15418, 15418] item_num+2
+        # Get the item with highest score
+        max_contribution, top1_indices = scores.topk(k=1, dim=-1)  # (batch_size, 1) # contribution 最高的item
+        min_contribution, min_index = scores.topk(k=1, dim=-1, largest = False)
+        for i, index in enumerate(input_seq): #i:batch_index
+            top1_item_idx = top1_indices[i, 0]
+            item_id = input_seq[i, top1_item_idx] #5062, 6275 #top1_indices[i, 0]: 每一个batch第一个
+            similar_items = similarity_matrix[item_id.long()].topk(k=1)[1] #10585: index
+            input_seq[i, min_index[i, 0]] = similar_items
+            new_score[i, min_index[i, 0]] = max_contribution[i, 0]
+        return input_seq, new_score

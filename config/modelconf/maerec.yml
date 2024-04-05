@@ -12,6 +12,7 @@ train:
   save_model: true
   trainer: maerec_trainer
   log_loss: false
+  pretrain_path: "/home/asaliao/SSLRec/checkpoint/maerec/maerec-reddit-1710592140.pth"
 
 test:
   metrics: [recall, ndcg, mrr] # choose in {ndcg, recall, precision, mrr}

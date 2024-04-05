@@ -46,26 +46,15 @@ class LSY(BaseModel):
         self.tau = configs['model']['tau']
         self.cl_weight = configs['model']['cl_weight']
         self.replace_ratio = configs['model']['replace_ratio']
-        self.aug_ratio = configs['model']['aug_ratio']
         self.sim_method = configs['model']['sim_method']
         self.with_contri = configs['model']['with_contri']
         self.cont_method = configs['model']['cont_method']
-        self.aug_k = configs['model']['aug_k']
-        self.aug_with_maxself = configs['model']['aug_with_maxself'] #False
-        self.aug_select = AugmentationSelector(self.max_len)
-        # if self.dataset == "sports":
-        #     self.candidates = torch.tensor([7647, 13170, 441, 8887, 1502, 10933, 3652, 3012, 12372, 4122, 9750, 10090, 6266, 6275, 3533, 9794, 5961, 7203, 12874, 8969, 
-        #                                      14066, 6118, 12911, 6569, 8763, 1930, 14204, 5265, 10075, 11145, 12691, 5863, 8635, 3127, 6616, 11306, 5633, 5858, 8213, 1587, 
-        #                                      5626, 4806, 2221, 1535, 766, 592, 3505, 14675, 8147, 5958, 2259, 4666, 4263, 14056, 9232, 14199, 8602, 12779, 1194, 8261, 8250, 
-        #                                      13354, 9262, 9381, 1226, 12918, 10062, 9298, 11899, 5438, 11, 9168, 13046, 8291, 2982, 6376, 12245, 1652, 11229, 11712, 940, 349, 
-        #                                      2141, 418, 3488, 5566, 770, 7687, 12211, 10383, 11859, 7854, 1630, 3699, 11128, 9292, 5719, 14320, 9183, 1931, 8861, 1557, 15046, 
-        #                                      8684, 3100, 3209, 8931, 11106, 12597, 6537, 5897, 11029, 9920, 8403, 8711, 7075, 12067, 10178, 10060, 14486, 2841, 14183, 13020, 
-        #                                      15232, 8089, 3760, 4523, 1852, 1275, 14653, 14952, 7234, 14649, 2483, 14690, 6921, 6107, 598, 13589, 13680, 14483, 12504, 6691, 
-        #                                      7154, 2778, 931, 7697, 8240, 4130, 1424, 7850, 7146, 964, 13681, 12778, 12689, 9059, 10827, 10305, 8669, 7641, 8838, 10889, 3246, 
-        #                                      10101, 4241, 142, 14965, 4250, 2704, 10688, 13596, 12215, 2660, 3952, 14575, 14989, 6772, 13462, 12757, 7374, 3382, 4637, 5555, 
-        #                                      2149, 13017, 818, 2535, 6394, 10415, 14581, 10877, 9017, 7750, 9810, 10036, 2607, 10896, 726, 14095])
         
-        self.MLP = MLP(self.hidden_size*self.max_len, self.max_len, self.max_len, num_layers=1) #hidden_layer =1, outputlayer = 1, total = 2
+        self.SelfAttentionModel = SelfAttentionModel(self.hidden_size, self.max_len, self.n_heads)
+        self.SelfAttentionModel_2 = SelfAttentionModel(self.hidden_size, self.max_len, self.n_heads)
+        self.MLP = MLP(self.max_len, self.max_len, self.max_len, num_layers=1) #hidden_layer =1, outputlayer = 1, total = 2
+        # self.l_MLP = MLP(self.max_len * self.hidden_size, self.max_len, self.max_len, num_layers=1)
+        # self.multi_head = MultiHeadAttention(num_heads=self.n_heads, hidden_size=self.hidden_size, dropout=self.dropout_rate)
         self.mask_default = self.mask_correlated_samples(
             batch_size= self.batch_size)
 
@@ -90,9 +79,9 @@ class LSY(BaseModel):
         self.out_fc = nn.Linear(self.hidden_size, self.item_num + 1)
         self.cl_loss_func = nn.CrossEntropyLoss()
         if self.dataset == "sports":
-            self.emb_nn = nn.Sequential(nn.Linear(self.hidden_size, 64),nn.Sigmoid())
+            self.emb_nn = nn.Sequential(nn.Linear(self.hidden_size, 8),nn.Sigmoid())
         else:
-            self.emb_nn = nn.Sequential(nn.Linear(self.hidden_size, 32),nn.Sigmoid())#, nn.Dropout(0.1))
+            self.emb_nn = nn.Sequential(nn.Linear(self.hidden_size, 16),nn.Sigmoid())#, nn.Dropout(0.1))
         self.emb_nn[0].apply(lambda module: nn.init.uniform_(module.weight.data,0,0.001))
         self.emb_nn[0].apply(lambda module: nn.init.uniform_(module.bias.data,0,0.001))
 
@@ -147,92 +136,67 @@ class LSY(BaseModel):
         return seqs[:, -self.max_len:]
 
     # 基于邻近项的补充
-    def impute_missing_items(self, input_seq, scores, p_aug, p_repleace): # inputseq:padded b,l # item_seq, seq_contribution_score, p_aug, p_repleace
-        if self.dataset == "sports":
-            item_candidates = torch.unique(input_seq.flatten())
-            item_candidates = self.emb_layer.token_emb(item_candidates)
-        else:
-            item_candidates = self.emb_layer.token_emb.weight[:, :]
+    def impute_missing_items(self, input_seq, scores, topk =1): # inputseq: not padded yet
+        item_candidates = self.emb_layer.token_emb.weight[:, :]
         input_seq_1 = input_seq.clone().detach()
         input_seq_2 = input_seq.clone().detach()
-        # embedding_weights = self.emb_nn(item_candidates)
-        embedding_weights = item_candidates
-        new_score = scores.clone().detach() # print(new_score.requires_grad) #False
-        print(new_score)
+        # if self.candi == "all":
+        #     item_candidates = self.emb_layer.token_emb.weight[:, :]#.weight.clone().detach()
+        # else:
+        #     item_candidates = self.emb_layer.token_emb(input_seq)
+        # print(embedding_weights.requires_grad) #True
+        embedding_weights = self.emb_nn(item_candidates)
+        new_score = scores.clone().detach()
+        # print(new_score.requires_grad) #False
+        # similarity_matrix = F.cosine_similarity(embedding_weights.unsqueeze(1), embedding_weights.unsqueeze(0), dim=-1) #太占内存！！
         if self.sim_method == "mm":
             similarity_matrix = torch.mm(embedding_weights, embedding_weights.T).to(input_seq.device)
         elif self.sim_method == "cos":
             similarity_matrix = self.sim(embedding_weights, embedding_weights).to(input_seq.device)
         elif self.sim_method == "gate":
-            embedding_weights = embedding_weights * torch.sigmoid(embedding_weights.matmul(self.gating_weight)+self.gating_bias) # b, l, l
+            embedding_weights = embedding_weights * torch.sigmoid(embedding_weights.matmul(self.gating_weight)+self.gating_bias)
+            # b, l, l
             x_m = torch.stack((self.metric_w1*embedding_weights, self.metric_w2*embedding_weights)).mean(0)
             similarity_matrix = self.sim(x_m, x_m).to(input_seq.device)
             # item_sim[item_sim < 0] = 0.01
 
-        if not self.aug_with_maxself: # 将对角线元素设置为0，用得分最高的item自己代替得分最小的
-            diag_indices = torch.arange(similarity_matrix.size(0), device=similarity_matrix.device) # 获取对角线索引
-            similarity_matrix[diag_indices, diag_indices] = 0 #[15418, 15418] item_num+2
-        
-        max_contribution, max_indices = scores.topk(k=self.aug_k, dim=-1)  # (batch_size, k) # contribution 最高的item # Get the item with highest score
-        min_contribution, min_index = scores.topk(k=self.aug_k, dim=-1, largest = False)
-        for i, seq in enumerate(input_seq_1): #i:batch_index 
-            if (1-p_repleace[i]) * p_aug[i] > self.aug_ratio:    # 结合长度和分布共同决定是否进行变换
-                if p_repleace[i] > self.replace_ratio:
-                    for j in range(self.aug_k):
-                        topk_item_idx = max_indices[i, j]
-                        item_id = input_seq_1[i, topk_item_idx] #5062, 6275 #top1_indices[i, 0]: 每一个batch第一个
-                        item_idx = torch.where(item_candidates == item_id)[0]
-                        similar_items_idx = similarity_matrix[item_idx.long()].topk(k=1)[1] #10585: index
-                        similar_items = item_candidates[similar_items_idx]
-                        print(topk_item_idx, item_id, item_idx, similar_items_idx, similar_items, min_index[i, j])
-                        # 15, 0 (padding item), [], [], 17
-                        input_seq_2[i, min_index[i, j]] = similar_items
-                        # input_seq_1[i, min_index[i, j]] = item_id
-                        # new_score[i, min_index[i, j]] = max_contribution[i, j]
-                         # if prob < self.replace_ratio:
-            #             top1_item_idx = top1_indices[i, 0]
-            #             item_id = input_seq_1[i, top1_item_idx] #5062, 6275 #top1_indices[i, 0]: 每一个batch第一个
-            #             similar_items = similarity_matrix[item_id.long()].topk(k=1)[1] #10585: index
-            #             input_seq_2[i, min_index[i, 0]] = similar_items
-            #             input_seq_1[i, min_index[i, 0]] = item_id
-            #             new_score[i, min_index[i, 0]] = max_contribution[i, 0]
-                else:
-                    for j in range(self.aug_k):
-                        topk_item_idx = max_indices[i, j]
-                        item_id = input_seq_1[i, topk_item_idx] #5062, 6275 #top1_indices[i, 0]: 每一个batch第一个
-                        item_idx = torch.where(item_candidates == item_id)[0]
-                        similar_items_idx = similarity_matrix[item_idx.long()].topk(k=1)[1] #10585: index
-                        similar_items = item_candidates[similar_items_idx]
-                        position = torch.where(seq == item_id)[0].item() # Find the position of the item in input_seq_1
-                        # Insert the similar item into input_seq_2
-                        input_seq_2[i] = torch.cat((input_seq_2[i][:position], similar_items, input_seq_2[i][position:]), dim=0)           
-            print(input_seq, input_seq_1, input_seq_2)
-        return input_seq_1, input_seq_2
-    
+        # 获取对角线索引
+        diag_indices = torch.arange(similarity_matrix.size(0), device=similarity_matrix.device)
+        # 将对角线元素设置为0
+        similarity_matrix[diag_indices, diag_indices] = 0 #[15418, 15418] item_num+2
+        # Get the item with highest score
+        max_contribution, top1_indices = scores.topk(k=1, dim=-1)  # (batch_size, 1) # contribution 最高的item
+        min_contribution, min_index = scores.topk(k=1, dim=-1, largest = False)
+        for i, seq in enumerate(input_seq_1): #i:batch_index     
+            prob = random.random()
+            if prob < self.replace_ratio:
+                top1_item_idx = top1_indices[i, 0]
+                item_id = input_seq_1[i, top1_item_idx] #5062, 6275 #top1_indices[i, 0]: 每一个batch第一个
+                similar_items = similarity_matrix[item_id.long()].topk(k=1)[1] #10585: index
+                input_seq_2[i, min_index[i, 0]] = similar_items
+                input_seq_1[i, min_index[i, 0]] = item_id
+                new_score[i, min_index[i, 0]] = max_contribution[i, 0]
+        return input_seq_1, input_seq_2, new_score
 
     def forward(self, item_seq):
         mask = (item_seq > 0).unsqueeze(1).repeat(1, item_seq.size(1), 1).unsqueeze(1)
         x = self.emb_layer(item_seq) #b, max_l, h 
-        p_repleace = self.aug_select(item_seq) #b
         # print(x)
-        # if self.cont_method == "att":
-        #     seq_contribution_score = self.SelfAttentionModel(x)
-        # else: #mlp
-        seq_contribution_score = self.MLP(x) # b, l
-        std_dev = torch.std(seq_contribution_score, dim=1) #标准差 b,l
-        p_d= 1 - torch.exp(-std_dev)
-        # Normalize probability to ensure it is between 0 and 1
-        p_aug = (p_d - torch.min(p_d)) / (torch.max(p_d) - torch.min(p_d))  # b # [0.3093, 0.0935, 0.4187, 0.5053, 0.2575, 0.2001, 0.3147, 0.2539, 0.4102]
-        new_item_seq_1, new_item_seq_2 = self.impute_missing_items(item_seq, seq_contribution_score, p_aug, p_repleace)
+        if self.cont_method == "att":
+            seq_contribution_score = self.SelfAttentionModel(x)
+        else:
+            seq_contribution_score = self.MLP(x)
+        # 不直接计算b,l,h， 让h维度的的importance共享！！
+        new_item_seq_1, new_item_seq_2, pad_scores = self.impute_missing_items(item_seq, seq_contribution_score)
         new_x_emb_1 = self.emb_layer(new_item_seq_1)
         new_mask_1 = (new_item_seq_1 > 0).unsqueeze(1).repeat(1, new_item_seq_1.size(1), 1).unsqueeze(1)
         new_x_emb_2 = self.emb_layer(new_item_seq_2)
         new_mask_2 = (new_item_seq_2 > 0).unsqueeze(1).repeat(1, new_item_seq_2.size(1), 1).unsqueeze(1)
-
+        
         if self.with_contri:
             # new_x, pad_scores = x, seq_contribution_score
-            pad_scores = self.MLP(new_x_emb_1)
-            global_contribution_score = self.MLP(new_x_emb_2) # B,L
+            # global_contribution_score = self.MLP(pad_scores) # B,L
+            global_contribution_score = self.SelfAttentionModel_2(new_x_emb_2)
             x_1_weight = pad_scores.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
             # x_1_weight = seq_contribution_score.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
             x_2_weight = global_contribution_score.unsqueeze(-1).expand(-1, -1, x.size(1)) # b,l,l
@@ -330,16 +294,4 @@ class LSY(BaseModel):
             mask[i, batch_size + i] = 0
             mask[batch_size + i, i] = 0
         return mask
-class AugmentationSelector(nn.Module):
-    def __init__(self, max_seq_length):
-        super(AugmentationSelector, self).__init__()
-        self.max_seq_length = max_seq_length
-    def forward(self, input_seq):
-        # 计算每个序列的长度
-        seq_lengths = torch.sum(input_seq != 0, dim=1).float()  # 忽略填充的部分
-        # 归一化序列长度
-        normalized_lengths = seq_lengths / self.max_seq_length
-        # 将长度映射到insert和replace的概率
-        probabilities = torch.sigmoid(normalized_lengths)
-        return probabilities 
 

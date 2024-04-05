@@ -11,6 +11,7 @@ train:
   test_step: 1
   reproducible: true
   seed: 2023
+  pretrain_path: "/home/asaliao/SSLRec/checkpoint/cl4srec/cl4srec-reddit-1710685519.pth" #"/home/asaliao/SSLRec/checkpoint/cl4srec/cl4srec-sports-1710576250.pth"
 
 test:
   metrics: [recall, ndcg, mrr]

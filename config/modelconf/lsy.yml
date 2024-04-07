@@ -5,6 +5,7 @@ optimizer:
 
 train:
   epoch: 200
+  patience: 8
   batch_size: 256 #512
   save_model: true
   log_loss: false
@@ -62,13 +63,17 @@ model:
   # hyper_len: 6
 
 tune:
-  enable: True
+  enable: false #True
   hyperparameters: []
   layer_num: []
   reg_weight: []
-  lmb: [0.05, 0.1, 0.2]
+  lmd: [0.05, 0.1, 0.2]
   tau: [0.5, 0.7, 0.9, 1]
-  cl_weight: [0.1, 0.2, 0.5, 1, 2]
-  replace_ratio: [0.1, 0.2, 0.3, 0.5, 0.8, 1]
   sim_method: ["mm", "cos", "gate"]
+  aug_with_maxself: [1, 0]
+  replace_ratio: [0.1, 0.2, 0.3, 0.5, 0.8, 1]
+  aug_ratio: [0.1, 0.2, 0.3, 0.5, 0.8, 1]
+  cl_weight: [0.1, 0.2, 0.5, 1, 2]
+  aug_k: [1,2,3,4,5]
+  
 

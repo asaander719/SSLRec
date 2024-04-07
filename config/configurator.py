@@ -8,6 +8,7 @@ def parse_configure():
     parser.add_argument('--dataset', type=str, default=None, help='Dataset name')
     parser.add_argument('--device', type=str, default='cuda', help='cpu or cuda')
     parser.add_argument('--cuda', type=str, default='0', help='Device number')
+    parser.add_argument('--batch_size', type=int, default=512, help='batch_size number')
     args = parser.parse_args()
 
     if args.device == 'cuda':
@@ -40,6 +41,10 @@ def parse_configure():
         # log
         if 'log_loss' not in configs['train']:
             configs['train']['log_loss'] = True
+
+        # batch_size
+        if args.batch_size is not None:
+            configs['train']['batch_size'] = configs['test']['batch_size'] = args.batch_size
 
         # early stop
         if 'patience' in configs['train']:

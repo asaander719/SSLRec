@@ -680,7 +680,7 @@ class MLP(nn.Module):
 
         # 激活函数
         self.activation = nn.ReLU()
-        self.sigmoid = nn.Sigmoid()
+        self.activation_out = nn.Sigmoid() #nn.Tanh() ##考虑noise负分的情况用Tanh
 
     def forward(self, x):
         if x.size(-1) != self.input_size:
@@ -688,7 +688,7 @@ class MLP(nn.Module):
         for layer in self.hidden_layers:
             x = self.activation(layer(x))
         x = self.output_layer(x)
-        x = self.sigmoid(x)
+        x = self.activation_out(x)
         return x
 # class MLP(nn.Module):
 #     def __init__(self, input_size, hidden_size, output_size, num_layers):

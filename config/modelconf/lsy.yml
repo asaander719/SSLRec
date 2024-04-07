@@ -5,7 +5,7 @@ optimizer:
 
 train:
   epoch: 200
-  batch_size: 3 #256 #512
+  batch_size: 256 #512
   save_model: true
   log_loss: false
   test_step: 1
@@ -16,7 +16,7 @@ train:
 test:
   metrics: [recall, ndcg, mrr]
   k: [5, 10, 20]
-  batch_size: 3 #256 #512
+  batch_size: 256 #512
 
 data:
   type: sequential
@@ -45,7 +45,7 @@ model:
   sim_method: "cos"
   with_contri: False
   cont_method: mlp #"att"
-  aug_ratio: 0.3
+  aug_ratio: 0.5
   aug_k: 1 #2
   aug_with_maxself: False
   # enable_hg: 1  

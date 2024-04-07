@@ -103,7 +103,7 @@ def visualize():
     plt.show()
 
 if __name__ == '__main__':
-    # test()
-    visualize()
+    test()
+    # visualize()
 
 

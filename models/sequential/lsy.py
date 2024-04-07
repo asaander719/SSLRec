@@ -188,7 +188,7 @@ class LSY(BaseModel):
         for i, seq in enumerate(input_seq_1): #i:batch_index 
             if (1-p_repleace[i]) * p_aug[i] > self.aug_ratio:    # 结合长度和分布共同决定是否进行变换
                 if p_repleace[i] > self.replace_ratio:
-                    for j in range(self.aug_k):
+                    for j in range(min(self.aug_k, len(seq > 0))):
                         topk_item_idx = max_indices[i, j] #49
                         item_id = input_seq_1[i, topk_item_idx] #5062, 6275 #top1_indices[i, 0]: 每一个batch第一个
                         item_idx = torch.where(item_candidates == item_id)[0]
@@ -207,7 +207,7 @@ class LSY(BaseModel):
             #             input_seq_1[i, min_index[i, 0]] = item_id
             #             new_score[i, min_index[i, 0]] = max_contribution[i, 0]
                 else:
-                    for j in range(self.aug_k):
+                    for j in range(min(self.aug_k, len(seq > 0))):
                         topk_item_idx = max_indices[i, j]
                         item_id = input_seq_1[i, topk_item_idx] #5062, 6275 #top1_indices[i, 0]: 每一个batch第一个
                         item_idx = torch.where(item_candidates == item_id)[0]
